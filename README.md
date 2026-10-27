@@ -1,12 +1,10 @@
 # Minecraft 模組下載器（Modrinth）
 
-## 使用語言：Python
-
 ---
 
 ## 功能
 
-依照 mods.json 的模組清單，從 Modrinth 下載指定 Minecraft 版本的模組。
+依照 `mods.json` 的模組清單，從 Modrinth 下載指定 Minecraft 版本的模組。
 
 ## 安全原則
 
@@ -25,3 +23,17 @@
 8. 處理單一模組
 9. 報告
 10. 主程式
+
+---
+
+## 檔案說明
+
+### `modrinth_downloader.py`
+
+此為自動模組下載器的主程式，不用動，從 modrinth 自動下載 mod.json 清單中指定的模組
+
+### `mod.json` 
+
+可自行更改成想要自動下載的模組
+
+---
