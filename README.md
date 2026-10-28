@@ -36,4 +36,8 @@
 
 可自行更改成想要自動下載的模組
 
+### `vanillatweaks_downloader.py`
+
+此為自動下載材質包的主程式，，自動從 Vanilla Tweaks 抓取指定材質包並下載
+
 ---
