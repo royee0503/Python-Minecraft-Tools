@@ -1,7 +1,13 @@
 # -------------------------
 # Vanilla Tweaks 材質包下載器
-# 依照 PACKS 清單，向 vanillatweaks.net 產生並下載
-# 與原本 TaurusTweaks 材質包內容一樣的 ZIP。
+# 依照材質包清單（PACKS_26_3 / PACKS_1_21_11，會依版本自動挑一份），
+# 向 vanillatweaks.net 產生並下載與原本 TaurusTweaks 材質包內容一樣的 ZIP。
+#
+# 使用方式：
+#   1. 執行程式，畫面會列出 Vanilla Tweaks 目前有的版本。
+#   2. 輸入要下載的 Minecraft 版本，例如 1.21.4、1.21.11、26.3。
+#      小版本會自動歸到大版本（1.21.1 ~ 1.21.11 都使用 1.21）。
+#   3. 不輸入、直接按 Enter = 最新版本；按 Q = 取消程式。
 # -------------------------
 
 from __future__ import annotations
@@ -11,8 +17,13 @@ import sys
 import unicodedata
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 import requests
+
+try:
+    import msvcrt  # 只有 Windows 有：可以「按一個鍵就立刻反應」
+except ImportError:
+    msvcrt = None
 
 # -------------------------
 # 1. 基本設定
@@ -20,7 +31,8 @@ import requests
 
 SITE = "https://vanillatweaks.net"
 
-# 預設版本：直接按 Enter 就使用這個版本。
+# 備用版本：只有「讀不到網站版本清單」時，按 Enter 才會用到。
+# 平常按 Enter 用的是網站上目前最新的版本，不需要手動更新這裡。
 DEFAULT_VERSION = "26.3"
 
 # 下載位置：使用者的「下載」資料夾。
@@ -40,48 +52,111 @@ HEADERS = {
 TIMEOUT = (10, 120)
 CHUNK_SIZE = 1024 * 256
 
-# 要下載的材質包（從原本 ZIP 的 Selected Packs.txt 取出，共 125 個）。
-# 想增減材質包，直接修改這個清單即可。
+# 輸入版本時最多接受幾個字元，避免亂打一大串。
+MAX_INPUT_LEN = 12
+
+# 版本號格式：主版本.次版本，後面可以再加一段小版本。
+# 例如 26.3、1.21、1.21.4、1.21.11、26.1.2
+VERSION_PATTERN = re.compile(r"\d{1,2}\.\d{1,2}(\.\d{1,2})?")
+
+# 輸入這些字就是取消（用 Enter 送出時）。
+CANCEL_WORDS = {"q", "quit", "exit", "離開", "取消"}
+
+# 要下載的材質包清單。程式會依照你選的版本，自動挑對應的那一份：
+#   - 26.x 以後（26.1、26.2、26.3，以及之後出現的新版本）→ PACKS_26_3
+#   - 1.21 及更舊的版本                                    → PACKS_1_21_11
+# 兩份清單分別從原本 ZIP 的 Selected Packs.txt 取出：
+#   TaurusTweaks_MC26.3_Survival_Server.zip    （125 個）
+#   TaurusTweaks_MC1.21.11_Survival_Server.zip （122 個）
+# 想增減材質包，直接修改對應的清單即可。
 # 名稱要用網站內部名稱（英文、無空格），例如 NoFog、3DDoors。
-PACKS = [
-    "HungerBarsGoldApple", "3DBookshelves", "StickyPistonSides",
-    "PixelConsistentGuardianBeam", "PixelConsistentSonicBoom",
-    "PixelConsistentBeaconBeam", "PixelConsistentXPOrbs",
-    "PixelConsistentWither", "PixelConsistentElderGuardian",
-    "PixelConsistentGhast", "ConsistentDecorPot", "ConsistentUIFix",
-    "JappaSpecIcons", "BlockOutlineRainbow", "TechnobladePigs",
-    "SusSandGravel", "SmootherFont", "PingColorIndicator", "WitherHearts",
-    "3DStonecutters", "3DSculkVein", "3DGlowLichen", "3DVines",
-    "3DMushrooms", "3DDoors", "3DLilyPads", "3DSugarcane", "3DIronBars",
-    "3DRails", "3DLadders", "3DMace", "3DPointedDripstone", "3DChains",
-    "3DChiseledBookshelves", "CleanerWorldBorder", "NoFog", "LowerFire",
-    "CleanTintedGlass", "CleanStainedGlass", "CleanGlass", "ArabicNumerals",
-    "VisualComposterStages", "VisualCauldronStages", "CompassLodestone",
-    "GroovyLevers", "DirectionalDispensersDroppers", "DirectionalHoppers",
-    "MusicDiscRedstonePreview", "HungerPreview", "DifferentStems",
-    "FullAgeCropMarker", "Fullbright", "BuddingAmethystBorders",
-    "BetterObservers", "QuieterWolves", "QuieterVillagers", "QuieterTurtles",
-    "QuieterTadpoles", "QuieterStriders", "QuieterSquids",
-    "QuieterSnowGolems", "QuieterSniffers", "QuieterSheep",
-    "QuieterRabbits", "QuieterPigs", "QuieterParrots", "QuieterPandas",
-    "QuieterLlamas", "QuieterIronGolems", "QuieterHorses",
-    "QuieterHappyGhasts", "QuieterFrogs", "QuieterFoxes", "QuieterEndermen",
-    "QuieterDolphins", "QuieterCows", "QuieterCopperGolems",
-    "QuieterChickens", "QuieterCats", "QuieterCamels", "QuieterBees",
-    "QuieterBats", "QuieterAxolotls", "QuieterArmadillos", "QuieterAllays",
-    "NoCaveSounds", "QuieterPistons", "QuieterWater",
-    "QuieterNetherPortals", "QuieterFire", "QuieterMinecarts",
-    "QuieterDispensersDroppers", "QuieterExplosions", "QuieterThunder",
-    "QuieterRain", "ShorterTallGrass", "ShorterGrass", "BrighterNether",
-    "SmoothCoarseDirt", "SmoothDirt", "SmootherStones", "SmootherOakLog",
-    "CircularSunandMoon", "HDEndFlash", "GoldenSavanna", "FencierFences",
-    "AshlessCampfires", "AnimatedCampfireItem", "SofterWool",
-    "LessPurplePurpur", "DesaturatedResin", "SolidSlime", "SolidHoney",
-    "UnbundledDriedKelp", "UnbundledHayBales", "VisibleTripwires",
-    "TripwireHookFix", "PixelConsistentSigns", "HangingSignLogs",
+# 某個版本還沒有的材質包，程式會列為「尚未更新」，不會當成錯誤。
+
+PACKS_26_3 = [
+    "UnbundledHayBales", "StickyPistonSides", "3DBookshelves",
+    "HungerBarsGoldApple", "UnbundledDriedKelp", "SolidHoney", "SolidSlime",
+    "DesaturatedResin", "LessPurplePurpur", "SofterWool",
+    "AnimatedCampfireItem", "AshlessCampfires", "FencierFences",
+    "GoldenSavanna", "HDEndFlash", "CircularSunandMoon", "SmootherOakLog",
+    "SmootherStones", "SmoothDirt", "SmoothCoarseDirt", "BrighterNether",
+    "ShorterGrass", "ShorterTallGrass", "QuieterRain", "QuieterThunder",
+    "QuieterExplosions", "QuieterDispensersDroppers", "QuieterMinecarts",
+    "QuieterFire", "QuieterNetherPortals", "QuieterWater", "QuieterPistons",
+    "NoCaveSounds", "QuieterAllays", "QuieterArmadillos", "QuieterAxolotls",
+    "QuieterBats", "QuieterBees", "QuieterCamels", "QuieterCats",
+    "QuieterChickens", "QuieterCopperGolems", "QuieterCows",
+    "QuieterDolphins", "QuieterEndermen", "QuieterFoxes", "QuieterFrogs",
+    "QuieterHappyGhasts", "QuieterHorses", "QuieterIronGolems",
+    "QuieterLlamas", "QuieterPandas", "QuieterParrots", "QuieterPigs",
+    "QuieterRabbits", "QuieterSheep", "QuieterSniffers",
+    "QuieterSnowGolems", "QuieterSquids", "QuieterStriders",
+    "QuieterTadpoles", "QuieterTurtles", "QuieterVillagers",
+    "QuieterWolves", "CleanGlass", "CleanStainedGlass", "CleanTintedGlass",
+    "LowerFire", "NoFog", "CleanerWorldBorder", "WitherHearts",
+    "PingColorIndicator", "SmootherFont", "SusSandGravel",
+    "TechnobladePigs", "BlockOutlineRainbow", "JappaSpecIcons",
+    "ConsistentUIFix", "ConsistentDecorPot", "PixelConsistentGhast",
+    "PixelConsistentElderGuardian", "PixelConsistentWither",
+    "PixelConsistentXPOrbs", "PixelConsistentBeaconBeam",
+    "PixelConsistentSonicBoom", "PixelConsistentGuardianBeam",
+    "BetterObservers", "BuddingAmethystBorders", "Fullbright",
+    "FullAgeCropMarker", "DifferentStems", "HungerPreview",
+    "MusicDiscRedstonePreview", "DirectionalHoppers",
+    "DirectionalDispensersDroppers", "GroovyLevers", "CompassLodestone",
+    "VisualCauldronStages", "VisualComposterStages", "ArabicNumerals",
+    "3DChiseledBookshelves", "3DChains", "3DPointedDripstone", "3DMace",
+    "3DLadders", "3DRails", "3DIronBars", "3DSugarcane", "3DLilyPads",
+    "3DDoors", "3DMushrooms", "3DVines", "3DGlowLichen", "3DSculkVein",
+    "3DStonecutters", "VisibleTripwires", "TripwireHookFix",
+    "PixelConsistentSigns", "HangingSignLogs", "ColoredGlintRainbow",
+    "AlternateEnchantGlint", "UnobtrusiveScaffolding",
+    "AccurateScaffolding", "FullAgeAmethystMarker", "3DAmethyst",
+]
+
+PACKS_1_21_11 = [
+    "HungerBarsGoldApple", "JappaSpecIcons", "ConsistentUIFix",
+    "ConsistentDecorPot", "PixelConsistentGhast",
+    "PixelConsistentElderGuardian", "PixelConsistentWither",
+    "PixelConsistentXPOrbs", "PixelConsistentBeaconBeam",
+    "PixelConsistentSonicBoom", "PixelConsistentGuardianBeam",
+    "IronBarsFix", "ItemHoldFix", "CloudFogFix", "SusSandGravel",
+    "TechnobladePigs", "ColoredHotbarSelOrange", "SmootherFont",
+    "WitherHearts", "3DBookshelves", "3DChiseledBookshelves", "3DChains",
+    "3DPointedDripstone", "3DMace", "3DLadders", "3DRails", "3DIronBars",
+    "3DSugarcane", "3DLilyPads", "3DMushrooms", "3DVines", "3DGlowLichen",
+    "3DStonecutters", "UnobtrusiveRain", "CleanGlass", "CleanStainedGlass",
+    "CleanTintedGlass", "LowerFire", "NoFog", "CleanerWorldBorder",
+    "BuddingAmethystBorders", "Fullbright", "HungerPreview",
+    "MusicDiscRedstonePreview", "StickyPistonSides", "DirectionalHoppers",
+    "DirectionalDispensersDroppers", "GroovyLevers", "CompassLodestone",
+    "VisualCauldronStages", "VisualComposterStages", "ArabicNumerals",
+    "QuieterAllays", "QuieterArmadillos", "QuieterAxolotls", "QuieterBats",
+    "QuieterBees", "QuieterCamels", "QuieterCats", "QuieterChickens",
+    "QuieterCopperGolems", "QuieterCows", "QuieterDolphins",
+    "QuieterEndermen", "QuieterFish", "QuieterFoxes", "QuieterFrogs",
+    "QuieterGoats", "QuieterHorses", "QuieterIronGolems", "QuieterPandas",
+    "QuieterParrots", "QuieterPhantoms", "QuieterPigs", "QuieterPolarBears",
+    "QuieterRabbits", "QuieterSheep", "QuieterSniffers",
+    "QuieterSnowGolems", "QuieterSquids", "QuieterVillagers",
+    "QuieterWolves", "QuieterRain", "QuieterThunder", "QuieterFire",
+    "QuieterNetherPortals", "QuieterWater", "QuieterPistons",
+    "NoCaveSounds", "VariatedMushroomBlocks", "CircularSunandMoon",
+    "HDEndFlash", "SmootherOakLog", "BrighterNether", "ShorterGrass",
+    "ShorterTallGrass", "UnbundledHayBales", "SolidHoney", "SolidSlime",
+    "SofterWool", "AnimatedCampfireItem", "AshlessCampfires",
+    "FencierFences", "VisibleTripwires", "TripwireHookFix",
+    "UniversalLushGrass", "GoldenSavanna", "FullAgeCropMarker",
+    "DifferentStems", "JappaObserver", "BetterObservers",
     "ColoredGlintRainbow", "AlternateEnchantGlint",
-    "UnobtrusiveScaffolding", "AccurateScaffolding",
-    "FullAgeAmethystMarker", "3DAmethyst",
+    "UnobtrusiveScaffolding", "AccurateScaffolding", "3DTiles", "3DDoors",
+    "FullAgeAmethystMarker", "3DAmethyst", "SmootherWarpedPlanks",
+    "PixelConsistentSigns", "HangingSignLogs",
+]
+
+# 清單選用規則：版本 >= 前面的數字，就用那一份（由新到舊，第一個符合的）。
+PACK_SETS = [
+    ((26, 0), "TaurusTweaks 26.3 版", PACKS_26_3),
+    ((0, 0), "TaurusTweaks 1.21.11 版", PACKS_1_21_11),
 ]
 
 
@@ -90,7 +165,12 @@ PACKS = [
 # -------------------------
 
 class VanillaTweaksError(Exception):
-    """預期內的錯誤（網路、版本不支援、網站回傳失敗等）。"""
+    """預期內的錯誤（網路、網站回傳失敗等）。"""
+    pass
+
+
+class VersionNotFoundError(VanillaTweaksError):
+    """網站沒有這個版本的資料（可以請使用者重新輸入）。"""
     pass
 
 
@@ -101,9 +181,13 @@ class VanillaTweaksError(Exception):
 def get_supported_versions(session: requests.Session) -> list[str]:
     """
     從網站的材質包選擇頁面，讀取目前支援的版本清單。
-    例如：["26.3", "26.2", "26.1", "1.21", ...]（新版本在前）
+    例如：["26.3", "26.2", "26.1", "1.21", ...]
 
-    讀取失敗時回傳空清單，之後改用「分類資料是否存在」來判斷。
+    清單是每次執行時即時從網站讀的，網站新增版本（例如 26.4）
+    不用改程式就會自動出現。
+
+    讀取失敗時回傳空清單；這時程式會改成直接向網站探測版本，
+    所以讀不到清單並不會讓下載失敗。
     """
 
     try:
@@ -116,18 +200,36 @@ def get_supported_versions(session: requests.Session) -> list[str]:
         return []
 
     # 版本按鈕的 HTML 長這樣：<a href='#' class='version-item'>26.2</a>
+    # 這裡放寬一點：class 裡有 version-item 就算，後面有其他屬性也可以。
     versions = re.findall(
-        r"class=['\"]version-item[^'\"]*['\"]>\s*([\d.]+)\s*</a>",
+        r"class=['\"][^'\"]*version-item[^'\"]*['\"][^>]*>\s*([\d.]+)\s*</a>",
         response.text
     )
 
-    # 去除重複，保留原本順序。
+    # 只保留長得像版本號的字串，並去除重複、保留原本順序。
+    versions = [v for v in versions if re.fullmatch(r"\d+(\.\d+)+", v)]
     return list(dict.fromkeys(versions))
 
 
 def version_tuple(version: str) -> tuple[int, ...]:
     """把 "1.21" 轉成 (1, 21)，方便比較新舊。"""
-    return tuple(int(part) for part in version.split("."))
+    return tuple(int(part) for part in version.split(".") if part.isdigit())
+
+
+def pick_pack_set(version: str) -> tuple[str, list[str]]:
+    """
+    依版本挑要下載的材質包清單，回傳 (清單名稱, 材質包名稱列表)。
+
+    26.x 以後（含之後出現的新版本）用 26.3 的清單；
+    1.21 及更舊的用 1.21.11 的清單。
+    清單裡網站該版本沒有的包，之後會列為「尚未更新」，不算錯誤。
+    """
+
+    current = version_tuple(version)
+    for minimum, label, packs in PACK_SETS:
+        if current >= minimum:
+            return label, packs
+    return PACK_SETS[-1][1], PACK_SETS[-1][2]
 
 
 def normalize_version(text: str) -> str:
@@ -137,91 +239,237 @@ def normalize_version(text: str) -> str:
     - 中文句號、逗號轉成點
     - 去掉前面的 v、mc、minecraft 等字
     - 去掉空白
+    - 1.21.x、1.21.* 視為 1.21（代表任何小版本）
     """
 
     text = unicodedata.normalize("NFKC", text).strip().lower()
     text = text.replace("。", ".").replace(",", ".").replace("，", ".")
     text = re.sub(r"^(minecraft|mc|v)\s*", "", text)
-    return text.replace(" ", "")
+    text = text.replace(" ", "")
+    return re.sub(r"\.(x|\*)$", "", text)
 
 
-def match_supported(version: str, supported: list[str]) -> str | None:
+def version_candidates(version: str) -> list[str]:
     """
-    在支援清單中找對應的版本。
+    列出可能的版本，越精確越前面。
 
-    Vanilla Tweaks 以「大版本」分類，例如：
-        1.21.5 -> 1.21
-        26.3.1 -> 26.3
-    所以找不到時，會一層一層去掉最後的小版本號再找。
+    Vanilla Tweaks 以「大版本」分類（網站上只有 1.21，沒有 1.21.4），
+    所以要一層一層去掉最後的小版本號再找：
+        1.21.11 -> ["1.21.11", "1.21"]
+        26.3.1  -> ["26.3.1", "26.3"]
+        26.3    -> ["26.3"]
+    至少保留兩段（主版本.次版本），不會退到只剩 "1"。
     """
 
     parts = version.split(".")
-    while parts:
-        candidate = ".".join(parts)
-        if candidate in supported:
-            return candidate
+    candidates = []
+    while len(parts) >= 2:
+        candidates.append(".".join(parts))
         parts.pop()
-    return None
+    return candidates
+
+
+# ---- 讀取使用者輸入（支援「按 Q 立刻取消」）----
+
+# 按鍵模式下，只接受這些字元，其他按鍵直接忽略。
+ALLOWED_KEYS = set("0123456789.x*")
+
+
+def stdin_is_terminal() -> bool:
+    """鍵盤輸入是不是接在真正的終端機上？"""
+    try:
+        return sys.stdin is not None and sys.stdin.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def hotkey_available() -> bool:
+    """
+    是不是能「按一個鍵就立刻反應」？
+    目前只有 Windows 的終端機可以（cmd、PowerShell、Windows Terminal、
+    VS Code 終端機）。IDLE、Jupyter 等環境會自動改用一般輸入，
+    這時要輸入 q 再按 Enter 才會取消。
+    """
+
+    try:
+        return (
+            msvcrt is not None
+            and sys.stdin is not None
+            and sys.stdin.isatty()
+        )
+    except (AttributeError, ValueError):
+        return False
+
+
+def _key_to_char(key: str) -> str:
+    """把按下的鍵整理成小寫單一字元：全形轉半形，中文句點、逗號轉成「.」。"""
+    key = unicodedata.normalize("NFKC", key).lower()
+    if key in {"。", ",", "，"}:
+        return "."
+    return key
+
+
+def _drain_keys() -> None:
+    """
+    清掉還沒被讀走的按鍵。
+
+    例如連續打 qwer：Q 一按就取消程式，後面的 w、e、r 如果不清掉，
+    會跑到 PowerShell / cmd 的命令列去，變成「無法辨識 'wer'」的錯誤。
+    """
+
+    try:
+        while msvcrt.kbhit():
+            msvcrt.getwch()
+    except (OSError, AttributeError):
+        pass
+
+
+def read_line_hotkey(
+    prompt: str,
+    getkey: Callable[[], str] | None = None
+) -> str | None:
+    """一個鍵一個鍵讀取輸入，並在結束時清掉多打的按鍵。詳見 _read_keys。"""
+
+    try:
+        return _read_keys(prompt, getkey or msvcrt.getwch)
+    finally:
+        _drain_keys()
+
+
+def _read_keys(prompt: str, getkey: Callable[[], str]) -> str | None:
+    """
+    一個鍵一個鍵讀取輸入。
+
+    - 一開始就按 Q（大小寫、全形都可以）：立刻取消，不用按 Enter，回傳 None
+    - 只接受數字、小數點、x、*，其他按鍵直接忽略（防止亂輸入）
+    - Backspace 可以刪除；Enter 送出；Ctrl+C 取消
+    """
+
+    print(prompt, end="", flush=True)
+    buffer: list[str] = []
+
+    while True:
+        key = getkey()
+
+        # 方向鍵、功能鍵會送出兩個碼，第二個碼也要讀掉。
+        if key in ("\x00", "\xe0"):
+            getkey()
+            continue
+
+        # Ctrl+C
+        if key == "\x03":
+            print()
+            return None
+
+        # Enter
+        if key in ("\r", "\n"):
+            print()
+            return "".join(buffer)
+
+        # Backspace
+        if key == "\x08":
+            if buffer:
+                buffer.pop()
+                print("\b \b", end="", flush=True)
+            continue
+
+        char = _key_to_char(key)
+
+        # 還沒輸入任何字就按 Q：直接取消。
+        if char == "q" and not buffer:
+            print(char)
+            return None
+
+        if char in ALLOWED_KEYS and len(buffer) < MAX_INPUT_LEN:
+            buffer.append(char)
+            print(char, end="", flush=True)
+
+
+def read_input(prompt: str) -> str | None:
+    """讀取一行輸入。回傳 None 代表使用者要取消（Q、Ctrl+C、Ctrl+D）。"""
+
+    if hotkey_available():
+        return read_line_hotkey(prompt)
+
+    try:
+        return input(prompt)
+    except EOFError:
+        print()
+        if not stdin_is_terminal():
+            print(
+                "偵測不到鍵盤輸入（目前的執行環境無法輸入文字）。\n"
+                "請在 PowerShell、cmd 或 VS Code 的「終端機」裡，"
+                "用 python 執行這支程式。"
+            )
+        return None
+    except KeyboardInterrupt:
+        print()
+        return None
+
+
+def show_supported_versions(supported: list[str]) -> None:
+    """列出 Vanilla Tweaks 目前有的版本（新的在前）。"""
+
+    ordered = sorted(supported, key=version_tuple, reverse=True)
+    print("Vanilla Tweaks 目前有的版本：")
+    print("  " + "、".join(ordered))
+    print("小版本會自動歸到對應的大版本，不用特別挑。")
+
+    if "1.21" in supported:
+        print("例如 1.21.1 ~ 1.21.11 都是 1.21.x，會使用 1.21 的材質包。")
+
+    print()
 
 
 def ask_version(supported: list[str]) -> str | None:
     """
-    讓使用者輸入 Minecraft 版本，輸入錯誤會請他重新輸入。
+    讓使用者輸入 Minecraft 版本。
 
-    - 直接按 Enter：使用最新支援的版本
-    - 輸入 q：離開程式（回傳 None）
+    - 不輸入、直接按 Enter：使用最新版本
+    - 按 Q：取消程式（回傳 None）
+    - 格式不對會請他重新輸入。這裡只檢查「格式」，
+      版本是否真的存在，交給 resolve_version 去向網站確認。
     """
 
-    default = supported[0] if supported else DEFAULT_VERSION
-
     if supported:
-        print(f"Vanilla Tweaks 目前支援的版本：{', '.join(supported)}")
+        default = max(supported, key=version_tuple)
+        show_supported_versions(supported)
+        prompt = (
+            f"請輸入要下載的版本"
+            f"（不輸入、直接按 Enter = 最新版 {default}；按 Q = 取消）："
+        )
+    else:
+        default = DEFAULT_VERSION
+        prompt = (
+            f"請輸入要下載的版本"
+            f"（讀不到最新版資訊，直接按 Enter = 備用版本 {default}；"
+            f"按 Q = 取消）："
+        )
 
     while True:
-        try:
-            raw = input(
-                f"請輸入 Minecraft 版本（按 Enter = {default}，輸入 q = 離開）："
-            )
-        except (EOFError, KeyboardInterrupt):
-            print()
+        raw = read_input(prompt)
+
+        if raw is None:
             return None
 
         text = normalize_version(raw)
 
-        if text == "":
-            return default
-
-        if text in {"q", "quit", "exit", "離開"}:
+        if text in CANCEL_WORDS:
             return None
 
-        # 格式檢查：只能是數字和點，例如 26.3、1.21.5。
-        if not re.fullmatch(r"\d{1,3}(\.\d{1,3}){1,3}", text):
-            print(f"  「{raw.strip()}」不是版本號，請輸入像 26.3 或 1.21 這樣的格式。\n")
+        if text == "":
+            print(f"  沒有輸入版本，使用最新版本 {default}。")
+            return default
+
+        if not VERSION_PATTERN.fullmatch(text):
+            shown = raw.strip()[:20]
+            print(
+                f"  「{shown}」格式不對。請只輸入數字和小數點，"
+                f"例如 26.3 或 1.21.4。\n"
+            )
             continue
 
-        # 網站版本清單讀取失敗時，只做格式檢查，
-        # 實際是否存在由下一步的分類資料判斷。
-        if not supported:
-            return text
-
-        matched = match_supported(text, supported)
-
-        if matched == text:
-            return text
-
-        if matched:
-            print(f"  Vanilla Tweaks 的 {text} 歸在 {matched}，將使用 {matched}。")
-            return matched
-
-        # 找不到時，判斷是「還沒出」還是「太舊或不存在」。
-        newest = supported[0]
-        if version_tuple(text) > version_tuple(newest):
-            print(
-                f"  Vanilla Tweaks 還沒推出 {text} 版本，"
-                f"目前最新是 {newest}。\n"
-            )
-        else:
-            print(f"  Vanilla Tweaks 不支援 {text}，請從上面的清單選一個。\n")
+        return text
 
 
 # -------------------------
@@ -248,6 +496,8 @@ def get_pack_categories(
     子分類用 "." 連接，例如：
         QuieterWolves -> peace-and-quiet.mobs
         NoFog         -> unobtrusive
+
+    網站沒有這個版本時（404）丟出 VersionNotFoundError。
     """
 
     url = f"{SITE}/assets/resources/json/{version}/rpcategories.json"
@@ -258,7 +508,7 @@ def get_pack_categories(
         raise VanillaTweaksError(f"連線 Vanilla Tweaks 失敗：{exc}") from exc
 
     if response.status_code == 404:
-        raise VanillaTweaksError(
+        raise VersionNotFoundError(
             f"Vanilla Tweaks 目前沒有 {version} 版本的材質包。"
         )
 
@@ -292,6 +542,41 @@ def get_pack_categories(
         raise VanillaTweaksError("分類資料是空的，無法繼續。")
 
     return pack_map
+
+
+def resolve_version(
+    session: requests.Session,
+    requested: str,
+    supported: list[str]
+) -> tuple[str, dict[str, str]]:
+    """
+    把使用者輸入的版本，對應到網站實際有資料的版本。
+
+    - 網站版本清單裡有的，優先嘗試（1.21.4 -> 直接用 1.21，不浪費請求）
+    - 清單沒列到、或讀不到清單時，改成直接向網站確認（404 就退一層）
+    這樣網站日後新增版本、或版本清單格式變了，都不會讓程式壞掉。
+
+    回傳 (實際使用的版本, 材質包分類對照表)。
+    """
+
+    candidates = version_candidates(requested)
+    known = [c for c in candidates if c in supported]
+    others = [c for c in candidates if c not in supported]
+
+    for candidate in known + others:
+        try:
+            return candidate, get_pack_categories(session, candidate)
+        except VersionNotFoundError:
+            continue
+
+    if supported:
+        hint = f"目前有的版本：{'、'.join(supported)}"
+    else:
+        hint = "（也讀不到網站的版本清單，可能是網站暫時擋下連線）"
+
+    raise VersionNotFoundError(
+        f"Vanilla Tweaks 找不到 {requested} 的材質包資料，請重新輸入。{hint}"
+    )
 
 
 # -------------------------
@@ -426,62 +711,82 @@ def run() -> int:
     with requests.Session() as session:
         session.headers.update(HEADERS)
 
-        # 步驟 0：讀取網站支援的版本，再讓使用者輸入。
+        # 步驟 0：讀取網站目前有的版本，列出來讓使用者輸入。
         supported = get_supported_versions(session)
-        version = ask_version(supported)
 
-        if version is None:
-            print("已取消。")
-            return 0
+        if not supported:
+            print("提醒：讀不到網站的版本清單，改成直接向網站確認版本。\n")
 
-        print(f"\n目標版本：Minecraft {version}")
-        print(f"材質包數量：{len(PACKS)}")
+        # 輸入版本 -> 向網站確認；找不到就請使用者重新輸入。
+        while True:
+            requested = ask_version(supported)
+
+            if requested is None:
+                print("已取消。")
+                return 0
+
+            try:
+                version, pack_map = resolve_version(
+                    session, requested, supported
+                )
+                break
+            except VersionNotFoundError as exc:
+                print(f"  {exc}\n")
+
+        if version != requested:
+            print(
+                f"  {requested} 屬於 {version}.x，"
+                f"將使用 Vanilla Tweaks 的 {version} 材質包。"
+            )
+
+        print(f"\n目標版本：Minecraft {requested}（Vanilla Tweaks 分類：{version}）")
+        pack_label, packs = pick_pack_set(version)
+        print(f"材質包清單：{pack_label}（{len(packs)} 個）")
         print(f"下載位置：{DOWNLOAD_DIR}\n")
 
-        # 步驟 1：取得這個版本有哪些材質包。
-        print("1. 讀取分類資料…")
-        pack_map = get_pack_categories(session, version)
+        # 步驟 1：分類資料已在上面讀取完成。
+        print("1. 分類資料讀取完成。")
 
         # 步驟 2：依分類整理要送出的資料；
         # 這個版本沒有的材質包列為「尚未更新」，不算錯誤。
         selected: dict[str, list[str]] = {}
         not_available: list[str] = []
 
-        for name in PACKS:
+        for name in packs:
             key = pack_map.get(name)
             if key is None:
                 not_available.append(name)
                 continue
             selected.setdefault(key, []).append(name)
 
-        available_count = len(PACKS) - len(not_available)
+        available_count = len(packs) - len(not_available)
         print(f"   可用：{available_count} 個，尚未更新：{len(not_available)} 個")
 
         if not selected:
             raise VanillaTweaksError("清單中的材質包在這個版本都沒有。")
 
-        # 步驟 3：請網站打包。
+        # 步驟 3：請網站打包（用實際對應到的版本，例如 1.21）。
         print("2. 請網站產生 ZIP…")
         link = request_zip(session, version, selected)
 
-        # 步驟 4：下載。
+        # 步驟 4：下載。檔名使用你輸入的版本，方便辨認。
         print("3. 下載中…")
         zip_path = download_zip(
             session,
             link,
-            DOWNLOAD_DIR / f"VanillaTweaks_MC{version}.zip"
+            DOWNLOAD_DIR / f"VanillaTweaks_MC{requested}.zip"
         )
 
     # 步驟 5：檢查 ZIP 內容是否完整。
     packed = read_selected_packs(zip_path)
     missing_in_zip = [
-        name for name in PACKS
+        name for name in packs
         if name not in not_available and name not in packed
     ]
 
     print("\n完成。")
     print(f"檔案位置：{zip_path}")
-    print(f"ZIP 內含材質包：{len(packed)} / {len(PACKS)}")
+    print(f"ZIP 內含材質包：{len(packed)} / {len(packs)}")
 
     if not_available:
         print(f"\n以下材質包在 {version} 尚未更新（不是錯誤）：")
@@ -511,7 +816,7 @@ if __name__ == "__main__":
 
     except KeyboardInterrupt:
         # 使用者按 Ctrl+C 中斷。
-        print("\n已中斷。")
+        print("\n已取消。")
         exit_code = 130
 
     # 在 Jupyter Notebook 中執行時不呼叫 SystemExit，

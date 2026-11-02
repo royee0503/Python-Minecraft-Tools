@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import quote
 import requests
 
+
 # =========================================================
 # 1. 設定與常數
 # =========================================================
@@ -19,7 +20,9 @@ import requests
 API_BASE = "https://api.modrinth.com/v2"
 
 # Modrinth 要求 User-Agent 能辨識「是哪個程式、怎麼聯絡作者」。
-USER_AGENT = "mc-mod-manager/2.0 (https://github.com/royee0503)"
+# 偽裝成瀏覽器反而可能被限流或封鎖。
+# 若要公開程式，請在括號內填上自己的聯絡方式（例如 GitHub 網址）。
+USER_AGENT = "mc-mod-manager/2.0 (personal use)"
 
 TIMEOUT = (10, 60)          # (連線逾時, 讀取逾時) 秒
 CHUNK_SIZE = 1024 * 256     # 每次讀寫 256 KB
@@ -34,7 +37,6 @@ except NameError:
 
 CONFIG_PATH = BASE_DIR / "mods.json"
 
-# 產生下載報告的 JSON 檔（後面會用到，不要註解掉）
 REPORT_FILENAME = "download_report.json"
 INSTALLED_FILENAME = "installed.json"
 
@@ -48,8 +50,10 @@ RESULT_ERROR = "error"              # 發生錯誤
 SESSION = requests.Session()
 SESSION.headers["User-Agent"] = USER_AGENT
 
+
 class ModrinthError(Exception):
     """預期內的錯誤（設定、API、下載），主程式會統一捕捉並顯示。"""
+
 
 # =========================================================
 # 2. 資料結構
@@ -74,6 +78,7 @@ class ModResult:
     filename: str = ""
     warnings: list[str] = field(default_factory=list)
 
+
 # =========================================================
 # 3. 讀取設定檔
 # =========================================================
@@ -87,6 +92,7 @@ def _require_str_list(value: Any, key: str) -> list[str]:
     ):
         raise ModrinthError(f"mods.json 的 {key} 必須是非空字串陣列。")
     return value
+
 
 def load_config() -> Config:
     """讀取並驗證 mods.json。所有設定檢查都集中在這裡。"""
@@ -115,6 +121,7 @@ def load_config() -> Config:
         ).expanduser(),
     )
 
+
 def safe_version_folder(version: str) -> str:
     """
     確認版本名稱可以安全當作資料夾名稱。
@@ -123,6 +130,7 @@ def safe_version_folder(version: str) -> str:
     if not re.fullmatch(r"[A-Za-z0-9._+-]+", version) or version in {".", ".."}:
         raise ModrinthError("版本名稱只能包含英數字、點、底線、加號或減號。")
     return version
+
 
 # =========================================================
 # 4. Modrinth API
@@ -166,6 +174,7 @@ def api_get(path: str, params: dict[str, Any] | None = None) -> Any:
 
     raise ModrinthError("Modrinth API 重試後仍失敗。")
 
+
 def get_project_versions(
     project: str,
     game_version: str | None,
@@ -194,6 +203,7 @@ def get_project_versions(
         reverse=True,
     )
 
+
 def get_project_names(project_ids: list[str]) -> dict[str, str]:
     """
     一次查詢多個專案的名稱，回傳 {專案 ID: 名稱}。
@@ -211,6 +221,7 @@ def get_project_names(project_ids: list[str]) -> dict[str, str]:
         if isinstance(item, dict) and "id" in item
     }
 
+
 # =========================================================
 # 5. 挑選版本與檔案
 # =========================================================
@@ -221,6 +232,7 @@ def _valid_files(version: dict[str, Any]) -> list[dict[str, Any]]:
         f for f in (version.get("files") or [])
         if isinstance(f, dict) and f.get("url") and f.get("filename")
     ]
+
 
 def choose_version(
     versions: list[dict[str, Any]],
@@ -236,12 +248,14 @@ def choose_version(
             return version
     return None
 
+
 def choose_file(version: dict[str, Any]) -> dict[str, Any] | None:
     """優先選擇標記為 primary 的檔案，否則用第一個有效檔案。"""
     files = _valid_files(version)
     if not files:
         return None
     return next((f for f in files if f.get("primary")), files[0])
+
 
 def explain_not_updated(
     project: str,
@@ -279,6 +293,7 @@ def explain_not_updated(
         f"（{loader_text} 最新版本 {latest.get('version_number', '未知')} "
         f"支援：{', '.join(latest_games[-3:])}）"
     )
+
 
 # =========================================================
 # 6. 下載與驗證
@@ -338,6 +353,7 @@ def download_file(file_info: dict[str, Any], destination: Path) -> None:
     finally:
         temp_path.unlink(missing_ok=True)
 
+
 # =========================================================
 # 7. 已安裝清單（installed.json）
 # =========================================================
@@ -362,6 +378,7 @@ def save_installed(folder: Path, installed: dict[str, str]) -> None:
         encoding="utf-8",
     )
 
+
 def old_version_warning(
     folder: Path,
     installed: dict[str, str],
@@ -373,6 +390,7 @@ def old_version_warning(
     if old_filename and old_filename != new_filename and (folder / old_filename).exists():
         return f"舊版 {old_filename} 仍在資料夾中，請確認後手動移除，避免兩個版本衝突"
     return None
+
 
 # =========================================================
 # 8. 處理單一模組
@@ -397,6 +415,7 @@ def required_dependency_text(version: dict[str, Any]) -> str | None:
         or "未識別依賴"
         for dep in required
     )
+
 
 def process_mod(
     mod: dict[str, Any],
@@ -462,6 +481,7 @@ def process_mod(
         # API 資料缺欄位或型別不符
         return ModResult(label, RESULT_ERROR, f"API 資料格式異常：{exc!r}")
 
+
 def print_result(result: ModResult) -> None:
     """在畫面上顯示單一模組的結果。"""
     prefix = {
@@ -477,6 +497,7 @@ def print_result(result: ModResult) -> None:
     for warning in result.warnings:
         print(f"  - 提醒：{warning}")
 
+
 # =========================================================
 # 9. 報告
 # =========================================================
@@ -487,6 +508,7 @@ def count_by_result(results: list[ModResult]) -> dict[str, int]:
         counts[r.result] += 1
     counts["total"] = len(results)
     return counts
+
 
 def write_report(
     folder: Path,
@@ -512,6 +534,7 @@ def write_report(
         encoding="utf-8",
     )
     return report_path
+
 
 def print_summary(results: list[ModResult], report_path: Path) -> None:
     counts = count_by_result(results)
@@ -539,11 +562,13 @@ def print_summary(results: list[ModResult], report_path: Path) -> None:
 
     print(f"\n報告位置：{report_path}")
 
+
 # =========================================================
 # 10. 主程式
 # =========================================================
 
 CANCEL_KEYS = {"q", "quit", "exit"}   # 輸入這些字（不分大小寫）就取消
+
 
 def get_known_game_versions() -> set[str] | None:
     """
@@ -558,6 +583,7 @@ def get_known_game_versions() -> set[str] | None:
         item["version"] for item in data
         if isinstance(item, dict) and item.get("version")
     }
+
 
 def ask_game_version() -> str | None:
     """
@@ -597,6 +623,7 @@ def ask_game_version() -> str | None:
 
         return version
 
+
 def run() -> int:
     config = load_config()
     game_version = ask_game_version()
@@ -635,6 +662,7 @@ def run() -> int:
 
     # 尚未更新、已存在都不算錯誤，正常結束回傳 0。
     return 0
+
 
 if __name__ == "__main__":
     try:
